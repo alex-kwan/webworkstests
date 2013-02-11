@@ -26,63 +26,164 @@
 #include <zxing/common/HybridBinarizer.h>
 #include <zxing/qrcode/QRCodeReader.h>
 #include <zxing/MultiFormatReader.h>
+
+
 using namespace zxing;
 using namespace zxing::qrcode;
+
+#define DEBUG 1
+
 static bool shutdown;
 screen_window_t vf_win = NULL;
 static screen_context_t screen_ctx;
-void errz(camera_error_t err)
+camera_handle_t mCameraHandle;
+camera_error_t err;
+
+
+void printError(camera_error_t err)
 {
-switch (err) {
-case CAMERA_EAGAIN:
-fprintf(stderr,"The specified camera was not available. Try again.\n");
-break;
-case CAMERA_EINVAL:
-fprintf(stderr,"The camera call failed because of an invalid parameter.\n");
-break;
-case CAMERA_ENODEV:
-fprintf(stderr, "No such camera was found.\n");
-break;
-case CAMERA_EMFILE:
-fprintf(stderr,"The camera called failed because of a file table overflow.\n");
-break;
-case CAMERA_EBADF:
-fprintf(stderr,"Indicates that an invalid handle to a @c camera_handle_t value was used.\n");
-break;
-case CAMERA_EACCESS:
-fprintf(stderr,"Indicates that the necessary permissions to access the camera are not available.\n");
-break;
-case CAMERA_EBADR:
-fprintf(stderr,"Indicates that an invalid file descriptor was used.\n");
-break;
-case CAMERA_ENOENT:
-fprintf(stderr,"Indicates that the access a file or directory that does not exist.\n");
-break;
-case CAMERA_ENOMEM:
-fprintf(stderr, "Indicates that memory allocation failed.\n");
-break;
-case CAMERA_EOPNOTSUPP:
-fprintf(stderr,
-"Indicates that the requested operation is not supported.\n");
-break;
-case CAMERA_ETIMEDOUT:
-fprintf(stderr,"Indicates an operation on the camera is already in progress. In addition, this error can indicate that an error could not be completed because i was already completed. For example, if you called the @c camera_stop_video() function but the camera had already stopped recording video, this error code would be returned.\n");
-break;
-case CAMERA_EALREADY:
-fprintf(stderr,
-"Indicates an operation on the camera is already in progress. In addition,this error can indicate that an error could not be completed because it was already completed. For example, if you called the @c camera_stop_video() function but the camera had already stopped recording video, this error code would be returned.\n");
-break;
-case CAMERA_EUNINIT:
-fprintf(stderr,"Indicates that the Camera Library is not initialized.\n");
-break;
-case CAMERA_EREGFAULT:
-fprintf(stderr,"Indicates that registration of a callback failed.\n");
-break;
-case CAMERA_EMICINUSE:
-fprintf(stderr,"Indicates that it failed to open because microphone is already in use.\n");
-break;
+	switch (err) {
+	case CAMERA_EAGAIN:
+	fprintf(stderr,"The specified camera was not available. Try again.\n");
+	break;
+	case CAMERA_EINVAL:
+	fprintf(stderr,"The camera call failed because of an invalid parameter.\n");
+	break;
+	case CAMERA_ENODEV:
+	fprintf(stderr, "No such camera was found.\n");
+	break;
+	case CAMERA_EMFILE:
+	fprintf(stderr,"The camera called failed because of a file table overflow.\n");
+	break;
+	case CAMERA_EBADF:
+	fprintf(stderr,"Indicates that an invalid handle to a @c camera_handle_t value was used.\n");
+	break;
+	case CAMERA_EACCESS:
+	fprintf(stderr,"Indicates that the necessary permissions to access the camera are not available.\n");
+	break;
+	case CAMERA_EBADR:
+	fprintf(stderr,"Indicates that an invalid file descriptor was used.\n");
+	break;
+	case CAMERA_ENOENT:
+	fprintf(stderr,"Indicates that the access a file or directory that does not exist.\n");
+	break;
+	case CAMERA_ENOMEM:
+	fprintf(stderr, "Indicates that memory allocation failed.\n");
+	break;
+	case CAMERA_EOPNOTSUPP:
+	fprintf(stderr,
+	"Indicates that the requested operation is not supported.\n");
+	break;
+	case CAMERA_ETIMEDOUT:
+	fprintf(stderr,"Indicates an operation on the camera is already in progress. In addition, this error can indicate that an error could not be completed because i was already completed. For example, if you called the @c camera_stop_video() function but the camera had already stopped recording video, this error code would be returned.\n");
+	break;
+	case CAMERA_EALREADY:
+	fprintf(stderr,
+	"Indicates an operation on the camera is already in progress. In addition,this error can indicate that an error could not be completed because it was already completed. For example, if you called the @c camera_stop_video() function but the camera had already stopped recording video, this error code would be returned.\n");
+	break;
+	case CAMERA_EUNINIT:
+	fprintf(stderr,"Indicates that the Camera Library is not initialized.\n");
+	break;
+	case CAMERA_EREGFAULT:
+	fprintf(stderr,"Indicates that registration of a callback failed.\n");
+	break;
+	case CAMERA_EMICINUSE:
+	fprintf(stderr,"Indicates that it failed to open because microphone is already in use.\n");
+	break;
+	}
 }
+
+int disableQRCodeScanning(){
+	//check to see if the view finder is enabled, if it is enabled, disable it
+	err = camera_stop_photo_viewfinder(mCameraHandle);
+	if ( err != CAMERA_EOK){
+			   fprintf(stderr, "Error with turning off the photo viewfinder \n");
+			   printError( err ) ;
+			   return EIO;
+			}
+
+	//check to see if the camera is open, if it is open, then close it
+	err = camera_close(mCameraHandle);
+	if ( err != CAMERA_EOK){
+			   fprintf(stderr, "Error with closing the camera \n");
+			   printError( err ) ;
+			   return EIO;
+			}
+
+	return EOK;
 }
+
+
+void
+viewfinder_callback(camera_handle_t handle,
+                    camera_buffer_t* buf,
+                    void* arg)
+{
+			camera_frame_nv12_t* data = (camera_frame_nv12_t*)(&(buf->framedesc));
+			uint8_t* buff = buf->framebuf;
+			int stride = data->stride;
+			int width  = data->width;
+			int height = data->height;
+
+            try{
+            	Ref<LuminanceSource> source(new GreyscaleLuminanceSource((unsigned char *)buff, stride, height, 0,0,width,height));
+
+			Ref<Binarizer> binarizer(new HybridBinarizer(source));
+			Ref<BinaryBitmap> bitmap(new BinaryBitmap(binarizer));
+			Ref<Result> result;
+
+		QRCodeReader *reader = new QRCodeReader();
+		DecodeHints *hints = new DecodeHints();
+
+		hints->addFormat(BarcodeFormat_QR_CODE);
+		hints->addFormat(BarcodeFormat_EAN_8);
+		hints->addFormat(BarcodeFormat_EAN_13);
+		hints->addFormat(BarcodeFormat_UPC_A);
+		hints->addFormat(BarcodeFormat_UPC_E);
+		hints->addFormat(BarcodeFormat_DATA_MATRIX);
+		hints->addFormat(BarcodeFormat_CODE_128);
+		hints->addFormat(BarcodeFormat_CODE_39);
+		hints->addFormat(BarcodeFormat_ITF);
+		hints->addFormat(BarcodeFormat_AZTEC);
+
+		result = reader->decode(bitmap, *hints);
+		std::string newBarcodeData = result->getText()->getText().data();
+		disableQRCodeScanning();
+		fprintf(stderr, "Disabling Scanning due to QR Code found\n");
+#ifdef DEBUG
+		fprintf(stderr, "This is the detected QR Code : %s\n", newBarcodeData.c_str());
+#endif
+		}
+		catch (const std::exception& ex)
+		{
+#ifdef DEBUG
+			fprintf( stderr, "error occured : \%s \n", ex.what());
+#endif
+		}
+}
+
+int enableQRCodeScanning(){
+	mCameraHandle = CAMERA_HANDLE_INVALID;
+		camera_error_t err;
+
+		err = camera_open(CAMERA_UNIT_REAR,CAMERA_MODE_RW | CAMERA_MODE_ROLL,&mCameraHandle);
+
+		if ( err != CAMERA_EOK){
+		   fprintf(stderr, " error1 = %d\n ", err);
+		   printError( err ) ;
+		   return EIO;
+		}
+
+
+		err = camera_start_photo_viewfinder( mCameraHandle,&viewfinder_callback,NULL,NULL);
+		if ( err != CAMERA_EOK) {
+		   fprintf(stderr, "Ran into a strange issue when starting up the camera viewfinder\n");
+		   printError( err ) ;
+		   return EIO;
+		}
+	return EOK;
+}
+
 
 static void
 handle_screen_event(bps_event_t *event)
@@ -95,6 +196,9 @@ handle_screen_event(bps_event_t *event)
     switch (screen_val) {
     case SCREEN_EVENT_MTOUCH_TOUCH:
         fprintf(stderr,"Touch event");
+        disableQRCodeScanning();
+        fprintf(stderr,"No more QR codes will be detected now \n");
+
         break;
     case SCREEN_EVENT_MTOUCH_MOVE:
         fprintf(stderr,"Move event");
@@ -146,82 +250,7 @@ handle_navigator_event(bps_event_t *event) {
     fprintf(stderr,"\n");
 }
 
-static const char vf_group[] = "viewfinder_window_group";
 
-static void
-viewfinder_callback(camera_handle_t handle,
-                    camera_buffer_t* buf,
-                    void* arg)
-{
-	fprintf(stderr, "init now!\n");
-	fprintf( stderr, "frame size = %d\n", buf->framesize);
-	fprintf( stderr, "frame type = %d %d\n", buf->frametype,CAMERA_FRAMETYPE_NV12);
-	// these values need to be updated. Find out how to extract this info from the camera buffer
-
-
-	camera_frame_nv12_t* data = (camera_frame_nv12_t*)(&(buf->framedesc));
-			int stride = data->stride;
-			int width  = data->width;//0;
-			int height = data->height;//0;
-			fprintf(stderr, "setting up variables now! %d %d %d\n", stride, width, height);
-            fprintf(stderr, "variables for setting up source %d %d %d %d\n"
-            		, stride
-            		, buf->framesize / stride
-            		, width
-            		, height
-            		);
-
-            try{
-
-
-            	Ref<LuminanceSource> source(new GreyscaleLuminanceSource(buf->framebuf, width, height,0,245,700, 700));
-
-
-			fprintf(stderr, "2setting up variables now!\n");
-			Ref<Binarizer> binarizer(new HybridBinarizer(source));
-			fprintf(stderr, "3setting up variables now!\n");
-			Ref<BinaryBitmap> bitmap(new BinaryBitmap(binarizer));
-			fprintf(stderr, "4setting up variables now!\n");
-			Ref<Result> result;
-			fprintf(stderr, "creating reader now!\n");
-
-//			Ref<MultiFormatReader> m_reader = Ref<MultiFormatReader>(new MultiFormatReader());
-			            DecodeHints *hints = new DecodeHints();
-
-//
-			QRCodeReader *reader = new QRCodeReader();
-		//	DecodeHints hints;
-			hints->addFormat(BarcodeFormat_QR_CODE);
-			hints->addFormat(BarcodeFormat_EAN_8);
-			hints->addFormat(BarcodeFormat_EAN_13);
-			hints->addFormat(BarcodeFormat_UPC_A);
-			hints->addFormat(BarcodeFormat_UPC_E);
-			hints->addFormat(BarcodeFormat_DATA_MATRIX);
-			hints->addFormat(BarcodeFormat_CODE_128);
-			hints->addFormat(BarcodeFormat_CODE_39);
-			hints->addFormat(BarcodeFormat_ITF);
-			hints->addFormat(BarcodeFormat_AZTEC);
-//			m_reader->setHints(*hints);
-
-			// If the preview buffer is in landscape, we can rotate out bitmap to let us scan 1D codes
-//			if (m_landscapePreviewFrames) {
-//				Ref<BinaryBitmap> rotated = bitmap->rotateCounterClockwise();
-//				result = reader->decode(rotated, hints);
-//			}
-//			else {
-		fprintf(stderr, "decoding now!\n");
-		//result = m_reader->decode(bitmap);
-		result = reader->decode(bitmap, *hints);
-		//	}
-
-			// get the result of decoding the image
-			std::string newBarcodeData = result->getText()->getText().data();
-			vibration_request(1000, 100);
-            } catch (const std::exception& ex) {
-                                  	fprintf( stderr, "error occured : \%s n", ex.what());
-                                  }
-
-		}
 
 static void
 handle_event()
@@ -263,19 +292,12 @@ main(int argc, char **argv)
     /* Setup the window */
     screen_create_context(&screen_ctx, 0);
     screen_create_window(&screen_win, screen_ctx);
-    screen_create_window_group(screen_win, vf_group);
     screen_set_window_property_iv(screen_win, SCREEN_PROPERTY_USAGE, &usage);
     screen_create_window_buffers(screen_win, 1);
 
 
     screen_get_window_property_pv(screen_win, SCREEN_PROPERTY_RENDER_BUFFERS, (void **)&screen_buf);
     screen_get_window_property_iv(screen_win, SCREEN_PROPERTY_BUFFER_SIZE, rect+2);
-
-    /* Fill the screen buffer with blue */
-//    int attribs[] = { SCREEN_BLIT_COLOR, 0xff0000ff, SCREEN_BLIT_END };
-//    screen_fill(screen_ctx, screen_buf, attribs);
-//    screen_post_window(screen_win, screen_buf, 1, rect, 0);
-
 
     // Fill the window with black.
     int attribs[] = { SCREEN_BLIT_COLOR, 0x00000000, SCREEN_BLIT_END };
@@ -284,67 +306,12 @@ main(int argc, char **argv)
 
     // Signal bps library that navigator and screen events will be requested.
     bps_initialize();
-    //main_bps_chid = bps_channel_get_active();
     screen_request_events(screen_ctx);
     navigator_request_events(0);
 
+    enableQRCodeScanning();
 
-    camera_handle_t mCameraHandle;
-           camera_unit_t mCameraUnit;
-           mCameraHandle = CAMERA_HANDLE_INVALID;
-           camera_error_t err;
-              // Open the specified camera.
-
-
-             err = camera_open(
-           		  CAMERA_UNIT_REAR
-           		,CAMERA_MODE_RW | CAMERA_MODE_ROLL
-           		,&mCameraHandle);
-             if ( err != CAMERA_EOK){
-            	 fprintf(stderr, " error1 = %d\n ", err);
-             }
-             int numSupported = 0;
-             camera_frametype_t types[30];
-             camera_error_t t;
-             t = camera_get_photovf_frame_types( mCameraHandle, 0 , &numSupported , types);
-             if ( t != CAMERA_EOK){
-			  fprintf(stderr,"We have a problem with retrieving the frame types \n");
-			  errz( t ) ;
-			  return EIO;
-			 }
-
-             for(int i = 0; i < numSupported; i++){
-            	 fprintf(stderr, " %d \n ",types[i]);
-             }
-
-
-
-             t =  camera_set_photovf_property( mCameraHandle,
-
-                                                    CAMERA_IMGPROP_WIN_GROUPID, vf_group
-                                                    ,CAMERA_IMGPROP_WIN_ID, "my_viewfinder"
-												//    ,CAMERA_IMGPROP_FORMAT, CAMERA_FRAMETYPE_JPEG
-              	  	  	  	  	  	  	  );
-             fprintf(stderr,"Moving on to starting the viewfinder\n");
-             if ( t != CAMERA_EOK) {
-                    	   fprintf(stderr, "Ran into a strange issue when starting up the camera properties \n");
-                    	   errz( t ) ;
-            			 return EIO;
-            		 }
-             t = camera_start_photo_viewfinder( mCameraHandle
-	   	   	   	   	   	  ,&viewfinder_callback
-         	              , NULL//   ,&status_callback
-         	  		 //,NULL
-             		 //,NULL
-         	              ,NULL
-         	           );
-           if ( t != CAMERA_EOK) {
-        	   fprintf(stderr, "Ran into a strange issue when starting up the camera viewfinder\n");
-        	   errz( t ) ;
-			 return EIO;
-		 }
     while (!shutdown) {
-        /* Handle user input */
         handle_event();
 
     }
